@@ -3,7 +3,7 @@ title: "Houston analysis"
 format: html
 editor: visual
 author: "Austin Martinez"
-date: "11/10/2025"
+date: "12/01/2025"
 execute:
   message: false
   warning: false
@@ -53,15 +53,16 @@ buildings <- st_read(here("data", "gis_osm_buildings_a_free_1.gpkg"),
 ```
 
 ```{r}
+#| message: false
 # read in Socioeconomic data
 acs_geom <- st_read("data/ACS_2019_5YR_TRACT_48_TEXAS.gdb",
-                    layer = "ACS_2019_5YR_TRACT_48_TEXAS")|>
+                    layer = "ACS_2019_5YR_TRACT_48_TEXAS", quiet = TRUE)|>
                     dplyr::select(-c(GEOID)) |> 
                     rename(GEOID = GEOID_Data) |> 
                     st_transform(crs = 3083)
 
 acs_income <- st_read("data/ACS_2019_5YR_TRACT_48_TEXAS.gdb",
-                      layer = "X19_INCOME") |> dplyr::select(c(GEOID, B19013e1, B19013m1))
+                      layer = "X19_INCOME", quiet = TRUE) |> dplyr::select(c(GEOID, B19013e1, B19013m1))
 
 ```
 
@@ -98,6 +99,7 @@ blackout_vec <- st_make_valid(blackout_vec)
 ```
 
 ```{r}
+#| message: true
 # Crop to the Houston area
 houston_box <- st_bbox(c(xmin = -96.5, ymin = 29, xmax = -94.5, ymax = 30.5), crs = st_crs(blackout_vec))
 
@@ -110,6 +112,12 @@ houston_blackout <- st_crop(blackout_vec, houston_box)
 # Transform houston_blackout CRS to EPSG:3083
 houston_blackout_3083 <- st_transform(houston_blackout, crs = 3083)
 
+# Check if CRSs is EPSG:3083
+if (st_crs(houston_blackout_3083)$epsg == 3083) {
+  message("🟢 CRS is EPSG:3083")
+} else {
+  warning("❗ CRS is NOT EPSG:3083")
+}
 ```
 
 ### Exclude highways from the cropped blackout mask
@@ -149,7 +157,7 @@ affected_buildings <- st_join(buildings_3083, blackout_no_highway, join = st_int
 
 Since getting socioeconomic information for every home isn't doable, data from the U.S. Census Bureau’s American Community Survey for census tracts in 2019 was instead obtained. The folder ACS_2019_5YR_TRACT_48.gdb is an ArcGIS “file geodatabase”, a multi-file proprietary format that’s roughly analogous to a GeoPackage file.
 
-To get a feature layer that sf can use, the geometry layer (ACS_2019_5YR_TRACT_48_TEXAS) and the income layer (X19_INCOME) were combined using a left join on the GEOID column. The CRS was then transformed to EPSG:3083 (NAD83 / Texas Centric Albers Equal Area) to match the CRS of the blackout and building data..
+To get a feature layer that sf can use, the geometry layer (ACS_2019_5YR_TRACT_48_TEXAS) and the income layer (X19_INCOME) were combined using a left join on the GEOID column. The CRS was then transformed to EPSG:3083 (NAD83 / Texas Centric Albers Equal Area) to match the CRS of the blackout and building data.
 
 ```{r}
 # Check layer names
@@ -219,7 +227,14 @@ tm_homes <- tm_shape(affected_buildings) +
   tm_basemap("OpenStreetMap") +
   tm_bubbles(
     size = 0.2,
-    col = "red") +
+    col = "red"
+    ) +
+  tm_add_legend(
+    type = "symbol",
+    labels = "Affected Homes",
+    col = "red",
+    size = 0.5
+  ) +
   tm_layout(
     main.title = "Homes Affected by Blackouts in Houston, TX",
     legend.outside = TRUE
@@ -231,7 +246,6 @@ tm_homes <- tm_shape(affected_buildings) +
 tm_homes
 
 ```
-
 
 
 
@@ -284,10 +298,39 @@ tm_blackout_tracts
 
 ```
 
+```{r}
+# Make blackout_mask into polygons
+blackout_vec <- st_as_sf(blackout_mask, as_points = FALSE, merge = FALSE, na.rm = TRUE)
+
+# Change blackout_vec's CRS to 3083
+blackout_vec_3083 <- st_transform(blackout_vec, 3083)
+
+# Check which census tracts intersect a blackout polygon
+tracts_with_blackout <- st_intersects(acs_full_3083, blackout_vec_3083)
+acs_full_3083$blackout <- lengths(tracts_with_blackout) > 0
+
+# Make a box plot comparing the distributions of median household income for census tracts that did and did not experience blackouts
+ggplot(acs_full_3083, aes(x = blackout, y = B19013e1, fill = blackout)) +
+  geom_boxplot() +
+    scale_fill_manual(
+    values = c("TRUE" = "gray", "FALSE" = "yellow"),
+    labels = c("TRUE" = "Blackout", "FALSE" = "No Blackout"), # Change value names in legend
+    name = "Blackout Status"
+  ) +
+  scale_x_discrete(labels = c("No Blackout", "Blackout")) + # Change value names below box plots
+  labs(
+    title = "Median Household Income by Blackout Status",
+    x = "Blackout Status",
+    y = "Median Household Income (USD$)"
+  ) +
+  theme_minimal()
+
+
+```
 
 
 
-### a brief reflection (approx. 100 words) summarizing your results and discussing any limitations to this study
+### A brief reflection (approx. 100 words) summarizing your results and discussing any limitations to this study
 
 After this analysis was conducted it was found that the estimated number of homes in Houston, Texas that experienced a power outage due to the Winter storm Uri in Febuary 2021 was 157,417. A big limitation of this study was the data. Since the blackout mask was only based on two days of night light data, its probable that not all outages were captured. Another limitation was how the study was conducted. St_intersection was used, which assumes houses partially in the blackout zone experienced a power outage. This might have caused an over estimation of the extent of the blackout.
 
